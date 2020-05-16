@@ -38,7 +38,7 @@ def main():
 
     m, result = model.solveModel(modelDataMapping, debug=True)
     
-    m.write("ttmilp.lp")
+    #m.write("ttmilp.lp")
 
     #with open('ttmilp_model.pkl', mode='wb') as file:
     #    cloudpickle.dump(m, file)
