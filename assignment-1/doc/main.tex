@@ -10,6 +10,8 @@
 \usepackage{bussproofs}
 \usepackage{turnstile}
 \usepackage{stmaryrd}
+\usepackage{caption}
+\usepackage{subcaption}
 
 \usepackage{cancel}
 \newcommand{\lnec}{\Box}
@@ -30,8 +32,207 @@
 
     \maketitle
 
-    \clearpage
+    \section{Introduction}
+    In this report I will document my attempt at creating a good schedule for events.
+    These events are derived from SDU IMADA/NAT events and the model is then scored in $4$ different ways.
+    I have used \texttt{gurobi} as the solver for my MILP model, and a feasible solution is found given enough time.
 
-    Hello
+    \section{The model}
+    The model was to have some different hard-constraints as listed in the project description.
+    The objective function will be discussed at the end once all the parts have been discussed.
+    I have introduced some new sets to help develop this model which have reduced the set-up time of the model tremendously (about a 20x speed increase) and smaller but noticeable solve time.
+    The first of these are a set $B_r$ which is a collection of busy times for a given room $B = \{ B_r \subset P \,|\, r \in R \}$, note that this includes the banned slots from \texttt{timeslots.json} and busy from \texttt{rooms.json}.
+    I will also use $E_w$ to denote all the events for week $w \in P$.
+    This has an enormous impact on the time spent creating constraints, as the amount of events for a specific week is substantially smaller than the whole set of events.
+    Further notation will be introduced it appears.
+    Finally I have chosen that my "allocation" or "activation" variable $x$ is indexed by event $e \in E$, room $r \in R$ and time $p \in P$.
+    \subsection{Hard constraints}
+    \subsubsection{}
+    First I have the simple constraints that $x_{e,r,p}$ is boolean and all events must be scheduled.
+    Additionally I introduce the function $week: E \rightarrow \mathbb{N}$ which evaluate the scheduled week for an event (from the data).
+    \[x_{erp} \in \{0, 1\}\]
+    \[\sum_{(h,d,w) \in P, r \in R} x_{e,r,(h,d,week(e))} = 1, \forall e \in E\]
+    The constraint states that every event must be scheduled exactly once.
+    \subsubsection{}
+    Next is the constraint that will ensure that no two events will ever overlap in the same room.
+    \[\sum_{e \in E_w} \, \sum^h_{i=max(0, h - \ell(e) + 1)} x_{e,r,(i,d,w)} \leq 1, \, \forall (h,d,w) \in P, \, \forall r \in R\]
+    Here I make use of a new and unfamiliar sum $\sum^h_{i=max(0, h - \ell(e) + 1)}$.
+    This sum ensures that for some time $(h,d,w)$ and all events for the week $e$, the amount of "active" events within the time-range $\{ h - \ell(e) + 1 .. h \}$ cannot be more than $1$.
+    In other words, at some point this $(h,d,w)$ will be at the last scheduled time for an event $e$, at that moment and $h - \ell(e) + 1$ steps back, only one event must be scheduled (namely the event $e$).
+    We will see more of this time-range sum.
+    \subsubsection{}
+    This constraint states that a teacher may not teach two classes at the same time.
+    Or more specifically, no more than one room may ever be occupied by a class that requires the same teacher within the entire time-frame of a lecture.
+    I will additionally denote teacher events by the week they are scheduled in by $de \in D_w$.
+    \[\sum_{e \in de} \, \sum_{r \in R} \, \sum^h_{i=max(0, h - \ell(e) + 1)} x_{e,r,(i,d,w)} \leq 1 , \, \forall de \in D_w, \, \forall (h,d,w) \in P,\]
+    \subsubsection{}
+    Here I simply ensure that no events are scheduled to run during banned periods.
+    Note that I use the time-range sum here, since a event potentially could start before a banned time and range over it.
+    \[\sum^h_{i=max(0, h - \ell(e) + 1)}  x_{e,r,(i,d,w)} = 0 ,\, \forall e \in E_w ,\, \forall (h,d,w) \in B_r ,\, \forall r \in R\]
+    \subsubsection{}
+    Now I introduce the modelling of the precedence graph, which should model the precedence within a week.
+    I model this by using the "activation" day.
+    If the class is allocated in day $3$ its binary value will be $1$, thus the allocated day will be $1*3$.
+    The difference between the in-arc vertex's day in $e_1$ and the current day in $e_2$ must be at least $1$ (in favor of the preceding vertex being larger).
+    \[\hspace*{-1cm}\left(\sum_{r \in R} \, \sum_{(h,d,w) \in P} x_{e_2,r,(h,d,week(e_2)} * d \right) - \left(\sum_{r \in R} \, \sum_{(h,d,w) \in P} x_{e_1,r,(h,d,week(e_1)} * d \right) \geq 1, \, \forall e_1e_2 \in A, \, \forall e_2 \in E\]
+    \subsubsection{}
+    The constraint for "there is at most one event per course per day for each student", needs an introduction of a new set $H_{d,w}$.
+    $H_{d,w}$ is simply a set of hours for some $d,w \in P$.
+    Note that any combination of $h,d,w$ are implied as unique combinations of the original set.
+    Moreover the inclusion of the course has warranted two new additions, $C$ which is the set of courses and $Q_{c_w}$ which is the set of student events for some course and week.
+    $$\sum_{r \in R} \sum_{e \in q} \sum_{h' \in H_{d,w}} x_{e,r,(h',d,w)} \leq 1, \, \forall q \in Q_{c_w}, \, \forall c \in C , \, \forall (d,w) \in P$$
+    \subsubsection{}
+    The final hard-constraint states that no event may exceed the last hour.
+    This is modelled by introducing $final_{d,w}$ which is the final hour for a given day and week (or also expressed as $max(H_{d,w})$).
+    I use the time-range sum again, but here I only use the $final_{d,w}$ as my $h$.
+    The constraint will ensure that no lessons are scheduled such that they exceed the final hour of the day.
+    $$\sum^{final_{d,w}}_{i=max(0, final_{d,w} - \ell(e) + 1)} x_{e,r,(i,d,w)} = 0, \, \forall e \in E_w , \, \forall (d,w) \in P , \, \forall r \in R$$
+    \subsection{Objectives}
+    In the objectives I can give value to different assignments and formulate what better solutions are.
+    \subsubsection{}
+    Discomfort is minimized in regard to bad slots.
+    Let $O$ be the set of $c_p$ where $p \in P$ and $c \in \mathbb{N}$, $c$ being an arbitrary weight of how "bad" a timeslot is.
+    The minimum value this $c$ may take is $1$.
+    $$\alpha = \sum_{(h,d,w) \in P} \, \sum_{e \in E_w} \, \sum_{r \in R} \, \left( \sum^h_{i=max(0, h - \ell(e) + 1)} x_{e,r,(i,d,w)} \right) * c_{h,d,w}$$
+    In practice I have chosen the following values:
+    \begin{center}
+        \begin{tabular}{|c | c | c |}
+            \hline
+            Time & Day(s) & $c$ \\ [0.5ex]
+            \hline
+            8 & Mon-Fri &  5  \\
+            \hline
+            16 & Mon-Thu & 3  \\
+            \hline
+            17 & Mon-Thu & 4  \\
+            \hline
+            15, 16, 17 & Fri & 6  \\ [1ex]
+            \hline
+        \end{tabular}
+    \end{center}
+    \subsubsection{}
+    The number of events per day should be as low as possible.
+    I find the maximum lectures $ml$ of any one day for any one teacher, this should be minimized.
+    An average case minimization is harder to formulate because of the requirement of linearity (a sum of squares technique would be a nice alternative).
+    \[ml \geq \sum_{e \in de} \, \sum_{h' \in H_{d,w}} \, \sum_{r \in R} x_{e,r,(h',d,w)}, \, \forall de \in D_w, \, \forall (d,w) \in P\]
+    Since the solver is free to assign anything to $ml$, it will assign the smallest possible value that satisfies the constraint, eg the maximum of the right hand side of $\geq$.
+    \subsubsection{}
+    Like the previous constraint, an average case analysis is difficult, so I settle with the above strategy.
+    I employ the same strategy as above; minimization of the maximum amount of concurrent events for a student for any given time.
+    \[\beta \geq \sum_{e \in q} \sum_{r \in R} \, \sum^h_{i=max(0, h - \ell(e) + 1)} x_{e,r,(i,d,w)}, \, \forall q \in Q_w , \, \forall (h,d,w) \in P \]
+    \subsubsection{}
+    Finally the most difficult constraint to formulate, weekly stability.
+    Weekly stability in regard to events being scheduled the same day every week, I find the day where the maximum amount of events take place, I then maximize this.
+    A course is $E_c = \{e \in E | e \in C_c \}$
+    \[\Delta_{c,d} =  \sum_{(h,w) \in P} \, \sum_{e \in E_{c_w}} \,\sum_{r \in R}  x_{e,r,(h,d,w)}, \, \forall d \in P, \, \forall c \in C\]
+    Assuming our objective is the following:
+    \[\delta_c \geq \Delta_{c,d} , \, \forall d \in P\]
+    There is actually a problem here; $\delta_c$ can take \textbf{any} value in $\mathbb{N}$, so maximizing this would instantly result in $\delta_c = max(\mathbb{N}) , \, \forall c \in C$.
+    \\\\
+    I can get around this by using activation variables $y_{c,d}$ and big $M$ (which I simply assign to $|E|$ since a there can be at minimum $1$ course with length $E$).
+    The strategy is to have a $z_c$ take the maximum value of $\Delta_{c,d}, \, \forall d \in P$.
+    I can achieve this by "offsetting" a $\Delta_{c,d}$ by $\Delta_{c,d} + M y_{c,d}$ resulting in a value much larger than any value $\Delta_{c,d}$ can take, I then ensure that the solver must \textbf{only} assign $|\{d \in P\}| - 1$ values of $y_{c,d} = 1$, result in the solver picking the largest $\Delta_{c,d}$ as the "non scaled".
+    $z_c \leq \Delta_{c,d} + M y_{c,d}$.
+    Asking the solver to maximize this will result in the solver "picking" a $y_{c,d} = 0$ that results in the maximum of $z_c$ which of course will be $z_c = max(\{\Delta_{c,d} | d \in P\})$.
+    \begin{gather*}
+        y_{c,d} \in \{0, 1\}\\
+        M = |E|\\
+        z_c \in \mathbb{N}\\
+        \sum_{d \in P} y_{c,d} = |\{d \in P\}| - 1 , \, \forall c \in C\\
+        z_c \leq \Delta_{c,d} + M y_{c,d} , \, \forall d \in P , \, \forall c \in C\\
+    \end{gather*}
+    In practice we can instead use:
+    \[
+        \sum_{d \in P} y_{c,d} \leq |\{d \in P\}| - 1 , \, \forall c \in C\\
+    \]
+    Since largest $y_{c,d}$ will be deactivated.
+    I do this because $\geq$ and $\leq$ reduce the problem complexity.\\
+    Note the importance of restricting events to courses and that we invert the expression to make it a minimization problem instead of maximization.
+
+    \subsection{Putting it together}
+    Note that I split the precedence graph up into a variable for readability.
+    \begin{equation*}
+        \hspace{-1cm}
+        \begin{array}{ll@{}ll}
+            \text{minimize}  & \displaystyle\alpha + ml + \beta - \sum_{c \in C} z_c &\\
+            \text{subject to}& \displaystyle\sum_{(h,d,w) \in P, r \in R} x_{e,r,(h,d,week(e))} = 1,  & \, \forall e \in E\\
+            & \displaystyle\sum_{e \in E_w} \, \sum^h_{i=max(0, h - \ell(e) + 1)} x_{e,r,(i,d,w)} \leq 1, & \, \forall (h,d,w) \in P, \, \forall r \in R\\
+            & \displaystyle\sum_{e \in de} \, \sum_{r \in R} \, \sum^h_{i=max(0, h - \ell(e) + 1)} x_{e,r,(i,d,w)} \leq 1 , & \, \forall de \in D_w, \, \forall (h,d,w) \in P\\
+            & \displaystyle\sum^h_{i=max(0, h - \ell(e) + 1)}  x_{e,r,(i,d,w)} = 0 , & \, \forall e \in E_w ,\, \forall (h,d,w) \in B_r ,\, \forall r \in R\\
+            & t_e = \sum_{r \in R} \, \sum_{(h,d,w) \in P} x_{e,r,(h,d,week(e)} * d&  \\
+            & \displaystyle t_{e_2} - t_{e_1} \geq 1, & \, \forall e_1e_2 \in A, \, \forall e_2 \in E\\
+            & \displaystyle \sum_{r \in R} \sum_{e \in q} \sum_{h' \in H_{d,w}} x_{e,r,(h',d,w)} \leq 1, & \, \forall q \in Q_{c_w}, \, \forall c \in C , \, \forall (d,w) \in P\\
+            & \displaystyle \sum^{final_{d,w}}_{i=max(0, final_{d,w} - \ell(e) + 1)} x_{e,r,(i,d,w)} = 0, & \, \forall e \in E_w , \, \forall (d,w) \in P , \, \forall r \in R\\
+            & &\\
+            & \displaystyle \alpha = \sum_{(h,d,w) \in P} \, \sum_{e \in E_w} \, \sum_{r \in R} \, \left( \sum^h_{i=max(0, h - \ell(e) + 1)} x_{e,r,(i,d,w)} \right) * c_{h,d,w}\\
+            & \displaystyle ml \geq \sum_{e \in de} \, \sum_{h' \in H_{d,w}} \, \sum_{r \in R} x_{e,r,(h',d,w)}, & \, \forall de \in D_w, \, \forall (d,w) \in P\\
+            & \displaystyle \beta \geq \sum_{e \in q} \sum_{r \in R} \, \sum^h_{i=max(0, h - \ell(e) + 1)} x_{e,r,(i,d,w)}, & \, \forall q \in Q_w , \, \forall (h,d,w) \in P\\
+            & \displaystyle \Delta_{c,d} =  \sum_{(h,w) \in P} \, \sum_{e \in E_{c_w}} \,\sum_{r \in R}  x_{e,r,(h,d,w)}, & \, \forall d \in P, \, \forall c \in C\\
+            & \displaystyle \sum_{d \in P} y_{c,d} = |\{d \in P\}| - 1 , & \, \forall c \in C\\
+            & \displaystyle z_c \leq \Delta_{c,d} + M y_{c,d} , & \, \forall d \in P , \, \forall c \in C\\
+            & &\\
+            & y_{c,d} \in \{0, 1\} & \forall c \in C, \, \forall d \in P \\
+            & M = |E| &\\
+            & z_c \in \mathbb{N}, & \, \forall c \in C\\
+            & x_{e,r,p} \in \{0,1\},&  \forall e \in E ,\, \forall r \in R ,\, \forall p \in P &
+        \end{array}
+    \end{equation*}
+
+    \section{Conclusion}
+    I have run the model with different parameters, and there is room for improvement on the weighting (right now there is only weighting on the "bad" slots).
+    From inspection and output from the solver I have concluded that the model works and the constraints do as they are supposed to within the domain of what I was set out to solve.
+    A portion of the time was spent reducing computation time and memory consumption, such that the medium sized model could run (to a point where I left scopes to let the garbage collector, collect old data).
+    I have unsuccessfully run the medium sized model entirely because of memory limits, but I suspect that $64$ gigabytes of memory (maybe $32$ with swap) would do.
+    The small model runs in about $10$ minutes.
+    I have supplied some figures of the scheduled times for \textit{DM872}.
+    In the timeslot's the first line is the event id, the second are the teachers that can teach the course and the last is the rooms that it is scheduled to.
+    Notice that the events are usually scheduled tuesday and no events are scheduled at "bad" slots in appendix 2.
+    The first figure shows that banned slots are also respected in appendix 1.
+
+    \clearpage
+    \section{Appendix}
+    \subsection{}
+    \hspace*{-2cm}\includegraphics[scale=0.39]{../images/badslot.png}
+
+    \subsection{}
+    \begin{figure}
+        \vspace{-3.2cm}
+        \hspace*{-5cm}
+        \begin{subfigure}{.85\textwidth}
+            \centering
+            \includegraphics[width=1.1\linewidth]{../images/week-14.png}
+        \end{subfigure}%
+        \begin{subfigure}{.85\textwidth}
+            \centering
+            \includegraphics[width=1.1\linewidth]{../images/week-16.png}
+        \end{subfigure}
+        \hspace*{-5cm}
+        \begin{subfigure}{.85\textwidth}
+            \centering
+            \includegraphics[width=1.1\linewidth]{../images/week-17.png}
+        \end{subfigure}%
+        \begin{subfigure}{.85\textwidth}
+            \centering
+            \includegraphics[width=1.1\linewidth]{../images/week-18.png}
+        \end{subfigure}
+        \hspace*{-5cm}
+        \begin{subfigure}{.85\textwidth}
+            \centering
+            \includegraphics[width=1.1\linewidth]{../images/week-18.png}
+        \end{subfigure}%
+        \begin{subfigure}{.85\textwidth}
+            \centering
+            \includegraphics[width=1.1\linewidth]{../images/week-20.png}
+        \end{subfigure}
+        \hspace*{-5cm}
+        \begin{subfigure}{.85\textwidth}
+            \centering
+            \includegraphics[width=1.1\linewidth]{../images/week-21.png}
+        \end{subfigure}%
+        \begin{subfigure}{.85\textwidth}
+            \centering
+            \includegraphics[width=1.1\linewidth]{../images/week-22.png}
+        \end{subfigure}
+    \end{figure}
 
 \end{document}
