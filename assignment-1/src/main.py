@@ -6,9 +6,8 @@ from optparse import OptionParser
 import data
 import model
 
-# import config
 from datetime import datetime
-
+import cloudpickle
 
 def main():
     usage = "usage: %prog [options] DIRNAME"
@@ -20,7 +19,33 @@ def main():
         parser.error("Directory missing")
 
     dirname = args[0]
-    instance = data.Data(dirname)
+    
+    import pyomo.environ as po
+    import time
+    from datetime import datetime
+    import itertools
+
+    dataImporter = data.Data(dirname)
+
+    slots = dataImporter.slots
+    banned = dataImporter.banned
+    events = dataImporter.events
+    teachers = dataImporter.teachers
+    students = dataImporter.students
+    rooms = dataImporter.rooms
+    
+    modelDataMapping = model.prepareModel(events, students, teachers, slots, banned, rooms)
+
+    m, result = model.solveModel(modelDataMapping, debug=True)
+    
+    m.write("ttmilp.lp")
+
+    #with open('ttmilp_model.pkl', mode='wb') as file:
+    #    cloudpickle.dump(m, file)
+#
+    #
+    #with open('ttmilp_res.pkl', mode='wb') as file:
+    #    cloudpickle.dump(result, file)
 
 
 if __name__ == "__main__":
